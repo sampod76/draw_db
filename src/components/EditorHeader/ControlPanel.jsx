@@ -11,7 +11,7 @@ import {
   IconEdit,
   IconShareStroked,
 } from "@douyinfe/semi-icons";
-import { Link, useNavigate, useSearchParams } from "react-router-dom"; // ⬅ added useSearchParams
+import { Link, useNavigate } from "react-router-dom";
 import icon from "../../assets/icon_dark_64.png";
 import {
   Button,
@@ -82,12 +82,12 @@ import { exportSavedData } from "../../utils/exportSavedData";
 import { nanoid } from "nanoid";
 
 export default function ControlPanel({
-  diagramId,
+  diagramId, // string cuid
   setDiagramId,
   title,
   setTitle,
   lastSaved,
-  onNew, // ⬅ NEW: injected from WorkSpace to create a fresh diagram
+  onNew, // ⬅️ NEW: Workspace থেকে আসবে
 }) {
   const [modal, setModal] = useState(MODAL.NONE);
   const [sidesheet, setSidesheet] = useState(SIDESHEET.NONE);
@@ -99,6 +99,7 @@ export default function ControlPanel({
     extension: "",
   });
   const [importFrom, setImportFrom] = useState(IMPORT_FROM.JSON);
+
   const { saveState, setSaveState } = useSaveState();
   const { layout, setLayout } = useLayout();
   const { settings, setSettings } = useSettings();
@@ -127,11 +128,11 @@ export default function ControlPanel({
   const { t, i18n } = useTranslation();
   const { setGistId } = useContext(IdContext);
   const navigate = useNavigate();
-  const [searchParams, setSearchParams] = useSearchParams(); // ⬅ NEW
 
   const invertLayout = (component) =>
     setLayout((prev) => ({ ...prev, [component]: !prev[component] }));
 
+  // ----- undo/redo/copy helpers (unchanged logic) -----
   const undo = () => {
     if (undoStack.length === 0) return;
     const a = undoStack[undoStack.length - 1];
@@ -201,9 +202,11 @@ export default function ControlPanel({
       }
       setRedoStack((prev) => [...prev, a]);
     } else if (a.action === Action.EDIT) {
-      if (a.element === ObjectType.AREA) updateArea(a.aid, a.undo);
-      else if (a.element === ObjectType.NOTE) updateNote(a.nid, a.undo);
-      else if (a.element === ObjectType.TABLE) {
+      if (a.element === ObjectType.AREA) {
+        updateArea(a.aid, a.undo);
+      } else if (a.element === ObjectType.NOTE) {
+        updateNote(a.nid, a.undo);
+      } else if (a.element === ObjectType.TABLE) {
         const table = tables.find((t) => t.id === a.tid);
         if (a.component === "field") {
           updateField(a.tid, a.fid, a.undo);
@@ -346,9 +349,11 @@ export default function ControlPanel({
       else if (a.element === ObjectType.ENUM) deleteEnum(a.id, false);
       setUndoStack((prev) => [...prev, a]);
     } else if (a.action === Action.EDIT) {
-      if (a.element === ObjectType.AREA) updateArea(a.aid, a.redo);
-      else if (a.element === ObjectType.NOTE) updateNote(a.nid, a.redo);
-      else if (a.element === ObjectType.TABLE) {
+      if (a.element === ObjectType.AREA) {
+        updateArea(a.aid, a.redo);
+      } else if (a.element === ObjectType.NOTE) {
+        updateNote(a.nid, a.redo);
+      } else if (a.element === ObjectType.TABLE) {
         const table = tables.find((t) => t.id === a.tid);
         if (a.component === "field") {
           updateField(a.tid, a.fid, a.redo);
@@ -413,7 +418,7 @@ export default function ControlPanel({
           });
         } else if (a.component === "field_delete") {
           updateType(a.tid, {
-            fields: types[a.tid].fields.filter((_, i) => i !== a.fid),
+            fields: types[a.tid].fields.filter((field, i) => i !== a.fid),
           });
         } else if (a.component === "self") {
           updateType(a.tid, a.redo);
@@ -444,15 +449,13 @@ export default function ControlPanel({
     setTransform((prev) => ({ ...prev, zoom: prev.zoom * 1.2 }));
   const zoomOut = () =>
     setTransform((prev) => ({ ...prev, zoom: prev.zoom / 1.2 }));
-  const viewStrictMode = () => {
+  const viewStrictMode = () =>
     setSettings((prev) => ({ ...prev, strictMode: !prev.strictMode }));
-  };
-  const viewFieldSummary = () => {
+  const viewFieldSummary = () =>
     setSettings((prev) => ({
       ...prev,
       showFieldSummary: !prev.showFieldSummary,
     }));
-  };
   const copyAsImage = () => {
     toPng(document.getElementById("canvas")).then(function (dataUrl) {
       const blob = dataURItoBlob(dataUrl);
@@ -464,9 +467,9 @@ export default function ControlPanel({
   };
   const resetView = () =>
     setTransform((prev) => ({ ...prev, zoom: 1, pan: { x: 0, y: 0 } }));
+
   const fitWindow = () => {
     const canvas = document.getElementById("canvas").getBoundingClientRect();
-
     const minMaxXY = {
       minX: Infinity,
       minY: Infinity,
@@ -480,14 +483,12 @@ export default function ControlPanel({
       minMaxXY.maxX = Math.max(minMaxXY.maxX, table.x + settings.tableWidth);
       minMaxXY.maxY = Math.max(minMaxXY.maxY, table.y + getTableHeight(table));
     });
-
     areas.forEach((area) => {
       minMaxXY.minX = Math.min(minMaxXY.minX, area.x);
       minMaxXY.minY = Math.min(minMaxXY.minY, area.y);
       minMaxXY.maxX = Math.max(minMaxXY.maxX, area.x + area.width);
       minMaxXY.maxY = Math.max(minMaxXY.maxY, area.y + area.height);
     });
-
     notes.forEach((note) => {
       minMaxXY.minX = Math.min(minMaxXY.minX, note.x);
       minMaxXY.minY = Math.min(minMaxXY.minY, note.y);
@@ -512,6 +513,7 @@ export default function ControlPanel({
       pan: { x: centerX, y: centerY },
     }));
   };
+
   const edit = () => {
     if (selectedElement.element === ObjectType.TABLE) {
       if (!layout.sidebar) {
@@ -525,7 +527,7 @@ export default function ControlPanel({
         if (selectedElement.currentTab !== Tab.TABLES) return;
         document
           .getElementById(`scroll_table_${selectedElement.id}`)
-          .scrollIntoView({ behavior: "smooth" });
+          ?.scrollIntoView({ behavior: "smooth" });
       }
     } else if (selectedElement.element === ObjectType.AREA) {
       if (layout.sidebar) {
@@ -533,7 +535,7 @@ export default function ControlPanel({
         if (selectedElement.currentTab !== Tab.AREAS) return;
         document
           .getElementById(`scroll_area_${selectedElement.id}`)
-          .scrollIntoView({ behavior: "smooth" });
+          ?.scrollIntoView({ behavior: "smooth" });
       } else {
         setSelectedElement((prev) => ({
           ...prev,
@@ -551,7 +553,7 @@ export default function ControlPanel({
         if (selectedElement.currentTab !== Tab.NOTES) return;
         document
           .getElementById(`scroll_note_${selectedElement.id}`)
-          .scrollIntoView({ behavior: "smooth" });
+          ?.scrollIntoView({ behavior: "smooth" });
       } else {
         setSelectedElement((prev) => ({
           ...prev,
@@ -561,6 +563,7 @@ export default function ControlPanel({
       }
     }
   };
+
   const del = () => {
     switch (selectedElement.element) {
       case ObjectType.TABLE:
@@ -576,6 +579,7 @@ export default function ControlPanel({
         break;
     }
   };
+
   const duplicate = () => {
     switch (selectedElement.element) {
       case ObjectType.TABLE: {
@@ -608,6 +612,7 @@ export default function ControlPanel({
         break;
     }
   };
+
   const copy = () => {
     switch (selectedElement.element) {
       case ObjectType.TABLE:
@@ -631,12 +636,13 @@ export default function ControlPanel({
         break;
     }
   };
+
   const paste = () => {
     navigator.clipboard.readText().then((text) => {
       let obj = null;
       try {
         obj = JSON.parse(text);
-      } catch (error) {
+      } catch {
         return;
       }
       const v = new Validator();
@@ -649,30 +655,27 @@ export default function ControlPanel({
       }
     });
   };
+
   const cut = () => {
     copy();
     del();
   };
-  const toggleDBMLEditor = () => {
+
+  const toggleDBMLEditor = () =>
     setLayout((prev) => ({ ...prev, dbmlEditor: !prev.dbmlEditor }));
-  };
-  const save = () => setSaveState(State.SAVING);
-  const open = () => setModal(MODAL.OPEN);
-  const saveDiagramAs = () => setModal(MODAL.SAVEAS);
   const fullscreen = useFullscreen();
 
-  // ⬇ NEW: helper to clear URL params when needed (delete/new)
+  // -------------- MENU --------------
   const clearUrlIds = () => {
-    const sp = new URLSearchParams(searchParams);
+    const sp = new URLSearchParams(window.location.search);
     sp.delete("d");
     sp.delete("shareId");
-    setSearchParams(sp);
+    window.history.replaceState({}, "", `${window.location.pathname}?${sp}`);
   };
 
   const menu = {
     file: {
       new: {
-        // ⬇ call WorkSpace's createNewDiagram so next save creates a new record
         function: () => {
           if (typeof onNew === "function") onNew();
         },
@@ -683,61 +686,48 @@ export default function ControlPanel({
           newWindow.name = window.name;
         },
       },
-      open: {
-        function: open,
-        shortcut: "Ctrl+O",
-      },
+      open: { function: () => setModal(MODAL.OPEN), shortcut: "Ctrl+O" },
       view_list: {
-        function: () => {
-          navigate("/view-diagram-list");
-        },
+        function: () => navigate("/view-diagram-list"),
       },
       save: {
-        function: save,
+        // Workspace save() watcher ট্রিগার করবে
+        function: () => setSaveState(State.SAVING),
         shortcut: "Ctrl+S",
       },
       save_as: {
-        function: saveDiagramAs,
+        function: () => setModal(MODAL.SAVEAS),
         shortcut: "Ctrl+Shift+S",
       },
       save_as_template: {
         function: () => {
           db.templates
             .add({
-              title: title,
-              tables: tables,
-              database: database,
-              relationships: relationships,
-              notes: notes,
+              title,
+              tables,
+              database,
+              relationships,
+              notes,
               subjectAreas: areas,
               custom: 1,
-              ...(databases[database].hasEnums && { enums: enums }),
-              ...(databases[database].hasTypes && { types: types }),
+              ...(databases[database].hasEnums && { enums }),
+              ...(databases[database].hasTypes && { types }),
             })
-            .then(() => {
-              Toast.success(t("template_saved"));
-            });
+            .then(() => Toast.success(t("template_saved")));
         },
       },
-      rename: {
-        function: () => {
-          setModal(MODAL.RENAME);
-        },
-      },
+      rename: { function: () => setModal(MODAL.RENAME) },
       delete_diagram: {
         warning: {
           title: t("delete_diagram"),
           message: t("are_you_sure_delete_diagram"),
         },
         function: async () => {
-          if (!diagramId) {
-            Toast.error(t("oops_smth_went_wrong"));
-            return;
-          }
+          if (!diagramId) return Toast.error(t("oops_smth_went_wrong"));
           await db.diagrams
             .delete(diagramId)
             .then(() => {
-              setDiagramId(0);
+              setDiagramId("");
               setTitle("Untitled diagram");
               setTables([]);
               setRelationships([]);
@@ -748,11 +738,8 @@ export default function ControlPanel({
               setUndoStack([]);
               setRedoStack([]);
               setGistId("");
-
-              // ⬇ IMPORTANT: clear URL state & force next save to create new record
               clearUrlIds();
               window.name = "";
-
               Toast.success(t("deleted_successfully"));
             })
             .catch(() => Toast.error(t("oops_smth_went_wrong")));
@@ -760,7 +747,7 @@ export default function ControlPanel({
       },
       import_from: {
         children: [
-          { function: () => setModal(MODAL.IMPORT), name: "JSON" },
+          { function: fileImport, name: "JSON" },
           {
             function: () => {
               setModal(MODAL.IMPORT);
@@ -769,6 +756,7 @@ export default function ControlPanel({
             name: "DBML",
           },
         ],
+        function: () => {},
       },
       import_from_source: {
         ...(database === DB.GENERIC && {
@@ -836,11 +824,7 @@ export default function ControlPanel({
                   types,
                   database,
                 });
-                setExportData((prev) => ({
-                  ...prev,
-                  data: src,
-                  extension: "sql",
-                }));
+                setExportData((p) => ({ ...p, data: src, extension: "sql" }));
               },
             },
             {
@@ -853,11 +837,7 @@ export default function ControlPanel({
                   types,
                   database,
                 });
-                setExportData((prev) => ({
-                  ...prev,
-                  data: src,
-                  extension: "sql",
-                }));
+                setExportData((p) => ({ ...p, data: src, extension: "sql" }));
               },
             },
             {
@@ -870,11 +850,7 @@ export default function ControlPanel({
                   types,
                   database,
                 });
-                setExportData((prev) => ({
-                  ...prev,
-                  data: src,
-                  extension: "sql",
-                }));
+                setExportData((p) => ({ ...p, data: src, extension: "sql" }));
               },
             },
             {
@@ -887,11 +863,7 @@ export default function ControlPanel({
                   types,
                   database,
                 });
-                setExportData((prev) => ({
-                  ...prev,
-                  data: src,
-                  extension: "sql",
-                }));
+                setExportData((p) => ({ ...p, data: src, extension: "sql" }));
               },
             },
             {
@@ -904,11 +876,7 @@ export default function ControlPanel({
                   types,
                   database,
                 });
-                setExportData((prev) => ({
-                  ...prev,
-                  data: src,
-                  extension: "sql",
-                }));
+                setExportData((p) => ({ ...p, data: src, extension: "sql" }));
               },
             },
             {
@@ -922,11 +890,7 @@ export default function ControlPanel({
                   types,
                   database,
                 });
-                setExportData((prev) => ({
-                  ...prev,
-                  data: src,
-                  extension: "sql",
-                }));
+                setExportData((p) => ({ ...p, data: src, extension: "sql" }));
               },
             },
           ],
@@ -941,7 +905,7 @@ export default function ControlPanel({
             database,
             enums,
           });
-          setExportData((prev) => ({ ...prev, data: src, extension: "sql" }));
+          setExportData((p) => ({ ...p, data: src, extension: "sql" }));
         },
       },
       export_as: {
@@ -949,9 +913,9 @@ export default function ControlPanel({
           {
             name: "PNG",
             function: () => {
-              toPng(document.getElementById("canvas")).then(function (dataUrl) {
-                setExportData((prev) => ({
-                  ...prev,
+              toPng(document.getElementById("canvas")).then((dataUrl) => {
+                setExportData((p) => ({
+                  ...p,
                   data: dataUrl,
                   extension: "png",
                 }));
@@ -963,9 +927,9 @@ export default function ControlPanel({
             name: "JPEG",
             function: () => {
               toJpeg(document.getElementById("canvas"), { quality: 0.95 }).then(
-                function (dataUrl) {
-                  setExportData((prev) => ({
-                    ...prev,
+                (dataUrl) => {
+                  setExportData((p) => ({
+                    ...p,
                     data: dataUrl,
                     extension: "jpeg",
                   }));
@@ -979,9 +943,9 @@ export default function ControlPanel({
             function: () => {
               const filter = (node) => node.tagName !== "i";
               toSvg(document.getElementById("canvas"), { filter }).then(
-                function (dataUrl) {
-                  setExportData((prev) => ({
-                    ...prev,
+                (dataUrl) => {
+                  setExportData((p) => ({
+                    ...p,
                     data: dataUrl,
                     extension: "svg",
                   }));
@@ -1008,11 +972,7 @@ export default function ControlPanel({
                 null,
                 2,
               );
-              setExportData((prev) => ({
-                ...prev,
-                data: result,
-                extension: "json",
-              }));
+              setExportData((p) => ({ ...p, data: result, extension: "json" }));
             },
           },
           {
@@ -1020,18 +980,14 @@ export default function ControlPanel({
             function: () => {
               setModal(MODAL.CODE);
               const result = toDBML({ tables, relationships, enums, database });
-              setExportData((prev) => ({
-                ...prev,
-                data: result,
-                extension: "dbml",
-              }));
+              setExportData((p) => ({ ...p, data: result, extension: "dbml" }));
             },
           },
           {
             name: "PDF",
             function: () => {
               const canvas = document.getElementById("canvas");
-              toJpeg(canvas).then(function (dataUrl) {
+              toJpeg(canvas).then((dataUrl) => {
                 const doc = new jsPDF("l", "px", [
                   canvas.offsetWidth,
                   canvas.offsetHeight,
@@ -1060,11 +1016,7 @@ export default function ControlPanel({
                 database,
                 title,
               });
-              setExportData((prev) => ({
-                ...prev,
-                data: result,
-                extension: "md",
-              }));
+              setExportData((p) => ({ ...p, data: result, extension: "md" }));
             },
           },
           {
@@ -1081,11 +1033,7 @@ export default function ControlPanel({
                 ...(databases[database].hasTypes && { types }),
                 ...(databases[database].hasEnums && { enums }),
               });
-              setExportData((prev) => ({
-                ...prev,
-                data: result,
-                extension: "md",
-              }));
+              setExportData((p) => ({ ...p, data: result, extension: "md" }));
             },
           },
         ],
@@ -1093,7 +1041,7 @@ export default function ControlPanel({
       },
       exit: {
         function: () => {
-          save();
+          setSaveState(State.SAVING);
           if (saveState === State.SAVED) navigate("/");
         },
       },
@@ -1117,13 +1065,12 @@ export default function ControlPanel({
             Toast.error(t("oops_smth_went_wrong"));
             return;
           }
-
           db.table("diagrams")
             .delete(diagramId)
             .catch((error) => {
               Toast.error(t("oops_smth_went_wrong"));
               console.error(
-                `Error deleting records with gistId '${diagramId}':`,
+                `Error deleting records with id '${diagramId}':`,
                 error,
               );
             });
@@ -1339,11 +1286,14 @@ export default function ControlPanel({
     },
   };
 
+  // ------ hotkeys ------
   useHotkeys("mod+i", fileImport, { preventDefault: true });
   useHotkeys("mod+z", undo, { preventDefault: true });
   useHotkeys("mod+y", redo, { preventDefault: true });
-  useHotkeys("mod+s", save, { preventDefault: true });
-  useHotkeys("mod+o", open, { preventDefault: true });
+  useHotkeys("mod+s", () => setSaveState(State.SAVING), {
+    preventDefault: true,
+  });
+  useHotkeys("mod+o", () => setModal(MODAL.OPEN), { preventDefault: true });
   useHotkeys("mod+e", edit, { preventDefault: true });
   useHotkeys("mod+d", duplicate, { preventDefault: true });
   useHotkeys("mod+c", copy, { preventDefault: true });
@@ -1355,7 +1305,9 @@ export default function ControlPanel({
   useHotkeys("mod+down", zoomOut, { preventDefault: true });
   useHotkeys("mod+shift+m", viewStrictMode, { preventDefault: true });
   useHotkeys("mod+shift+f", viewFieldSummary, { preventDefault: true });
-  useHotkeys("mod+shift+s", saveDiagramAs, { preventDefault: true });
+  useHotkeys("mod+shift+s", () => setModal(MODAL.SAVEAS), {
+    preventDefault: true,
+  });
   useHotkeys("mod+alt+c", copyAsImage, { preventDefault: true });
   useHotkeys("enter", resetView, { preventDefault: true });
   useHotkeys("mod+h", () => window.open(socials.docs, "_blank"), {
@@ -1364,47 +1316,217 @@ export default function ControlPanel({
   useHotkeys("mod+alt+w", fitWindow, { preventDefault: true });
   useHotkeys("alt+e", toggleDBMLEditor, { preventDefault: true });
 
-  return (
-    <>
-      <div>
-        {layout.header && (
-          <div
-            className="flex justify-between items-center me-7"
-            style={isRtl(i18n.language) ? { direction: "rtl" } : {}}
-          >
-            {header()}
-            {window.name.split(" ")[0] !== "t" && (
-              <Button
-                type="primary"
-                className="!text-base me-2 !pe-6 !ps-5 !py-[18px] !rounded-md"
-                size="default"
-                icon={<IconShareStroked />}
-                onClick={() => setModal(MODAL.SHARE)}
+  // ----- UI helpers -----
+  function getState() {
+    switch (saveState) {
+      case State.NONE:
+        return t("no_changes");
+      case State.LOADING:
+        return t("loading");
+      case State.SAVED:
+        return `${t("last_saved")} ${lastSaved}`;
+      case State.SAVING:
+        return t("saving");
+      case State.ERROR:
+        return t("failed_to_save");
+      case State.FAILED_TO_LOAD:
+        return t("failed_to_load");
+      default:
+        return "";
+    }
+  }
+
+  function header() {
+    return (
+      <nav
+        className="flex justify-between pt-1 items-center whitespace-nowrap"
+        style={isRtl(i18n.language) ? { direction: "rtl" } : {}}
+      >
+        <div className="flex justify-start items-center">
+          <Link to="/">
+            <img
+              width={54}
+              src={icon}
+              alt="logo"
+              className="ms-7 min-w-[54px]"
+            />
+          </Link>
+          <div className="ms-1 mt-1">
+            <div className="flex items-center ms-3 gap-2">
+              {databases[database].image && (
+                <img
+                  src={databases[database].image}
+                  className="h-5"
+                  style={{
+                    filter:
+                      "opacity(0.4) drop-shadow(0 0 0 white) drop-shadow(0 0 0 white)",
+                  }}
+                  alt={databases[database].name + " icon"}
+                  title={databases[database].name + " diagram"}
+                />
+              )}
+              <div
+                className="text-xl  me-1"
+                onPointerEnter={(e) => e.isPrimary && setShowEditName(true)}
+                onPointerLeave={(e) => e.isPrimary && setShowEditName(false)}
+                onPointerDown={(e) =>
+                  e.target.releasePointerCapture?.(e.pointerId)
+                }
+                onClick={() => setModal(MODAL.RENAME)}
               >
-                {t("share")}
+                {window.name.split(" ")[0] === "t" ? "Templates/" : "Diagrams/"}
+                {title}
+              </div>
+              {(showEditName || modal === MODAL.RENAME) && <IconEdit />}
+            </div>
+            <div className="flex justify-between items-center">
+              <div className="flex justify-start text-md select-none me-2">
+                {Object.keys(menu).map((category) => (
+                  <Dropdown
+                    key={category}
+                    position="bottomLeft"
+                    style={{
+                      width: "240px",
+                      direction: isRtl(i18n.language) ? "rtl" : "ltr",
+                    }}
+                    render={
+                      <Dropdown.Menu className="menu max-h-[calc(100vh-80px)] overflow-auto">
+                        {Object.keys(menu[category]).map((item, index) => {
+                          if (menu[category][item].children) {
+                            return (
+                              <Dropdown
+                                style={{ width: "150px" }}
+                                key={item}
+                                position="rightTop"
+                                render={
+                                  <Dropdown.Menu>
+                                    {menu[category][item].children.map(
+                                      (e, i) => (
+                                        <Dropdown.Item
+                                          key={i}
+                                          onClick={e.function}
+                                          className="flex justify-between"
+                                        >
+                                          <span>{e.name}</span>
+                                          {e.label && (
+                                            <Tag
+                                              size="small"
+                                              color="light-blue"
+                                            >
+                                              {e.label}
+                                            </Tag>
+                                          )}
+                                        </Dropdown.Item>
+                                      ),
+                                    )}
+                                  </Dropdown.Menu>
+                                }
+                              >
+                                <Dropdown.Item
+                                  style={{
+                                    display: "flex",
+                                    justifyContent: "space-between",
+                                    alignItems: "center",
+                                  }}
+                                  onClick={menu[category][item].function}
+                                >
+                                  {t(item)}{" "}
+                                  {isRtl(i18n.language) ? (
+                                    <IconChevronLeft />
+                                  ) : (
+                                    <IconChevronRight />
+                                  )}
+                                </Dropdown.Item>
+                              </Dropdown>
+                            );
+                          }
+                          if (menu[category][item].warning) {
+                            return (
+                              <Popconfirm
+                                key={index}
+                                title={menu[category][item].warning.title}
+                                content={menu[category][item].warning.message}
+                                onConfirm={menu[category][item].function}
+                                position="right"
+                                okText={t("confirm")}
+                                cancelText={t("cancel")}
+                              >
+                                <Dropdown.Item>{t(item)}</Dropdown.Item>
+                              </Popconfirm>
+                            );
+                          }
+                          return (
+                            <Dropdown.Item
+                              key={index}
+                              onClick={menu[category][item].function}
+                              style={
+                                menu[category][item].shortcut && {
+                                  display: "flex",
+                                  justifyContent: "space-between",
+                                  alignItems: "center",
+                                }
+                              }
+                            >
+                              <div className="w-full flex items-center justify-between">
+                                <div>{t(item)}</div>
+                                <div className="flex items-center gap-1">
+                                  {menu[category][item].shortcut && (
+                                    <div className="text-gray-400">
+                                      {menu[category][item].shortcut}
+                                    </div>
+                                  )}
+                                  {menu[category][item].state &&
+                                    menu[category][item].state}
+                                </div>
+                              </div>
+                            </Dropdown.Item>
+                          );
+                        })}
+                      </Dropdown.Menu>
+                    }
+                  >
+                    <div className="px-3 py-1 hover-2 rounded-sm">
+                      {t(category)}
+                    </div>
+                  </Dropdown>
+                ))}
+              </div>
+              <Button
+                size="small"
+                type="tertiary"
+                icon={
+                  saveState === State.LOADING || saveState === State.SAVING ? (
+                    <Spin size="small" />
+                  ) : null
+                }
+              >
+                {getState()}
               </Button>
-            )}
+            </div>
           </div>
-        )}
-        {layout.toolbar && toolbar()}
-      </div>
-      <Modal
-        modal={modal}
-        exportData={exportData}
-        setExportData={setExportData}
-        title={title}
-        setTitle={setTitle}
-        setDiagramId={setDiagramId}
-        setModal={setModal}
-        importFrom={importFrom}
-        importDb={importDb}
-      />
-      <Sidesheet
-        type={sidesheet}
-        onClose={() => setSidesheet(SIDESHEET.NONE)}
-      />
-    </>
-  );
+        </div>
+        <div className="flex items-center gap-2">
+          {window.name.split(" ")[0] !== "t" && (
+            <Button
+              type="primary"
+              className="!text-base me-2 !pe-6 !ps-5 !py-[18px] !rounded-md"
+              size="default"
+              icon={<IconShareStroked />}
+              onClick={() => setModal(MODAL.SHARE)}
+            >
+              {t("share")}
+            </Button>
+          )}
+          <button
+            onClick={() => invertLayout("header")}
+            className="flex items-center"
+          >
+            {layout.header ? <IconChevronUp /> : <IconChevronDown />}
+          </button>
+        </div>
+      </nav>
+    );
+  }
 
   function toolbar() {
     return (
@@ -1433,9 +1555,9 @@ export default function ControlPanel({
                 {[0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0].map((e, i) => (
                   <Dropdown.Item
                     key={i}
-                    onClick={() => {
-                      setTransform((prev) => ({ ...prev, zoom: e }));
-                    }}
+                    onClick={() =>
+                      setTransform((prev) => ({ ...prev, zoom: e }))
+                    }
                   >
                     {Math.floor(e * 100)}%
                   </Dropdown.Item>
@@ -1540,7 +1662,7 @@ export default function ControlPanel({
           <Tooltip content={t("save")} position="bottom">
             <button
               className="py-1 px-2 hover-2 rounded-sm flex items-center"
-              onClick={save}
+              onClick={() => setSaveState(State.SAVING)}
             >
               <IconSaveStroked size="extra-large" />
             </button>
@@ -1561,9 +1683,9 @@ export default function ControlPanel({
                 const body = document.body;
                 if (body.hasAttribute("theme-mode")) {
                   if (body.getAttribute("theme-mode") === "light") {
-                    menu["view"]["theme"].children[1].function();
+                    setSettings((prev) => ({ ...prev, mode: "dark" }));
                   } else {
-                    menu["view"]["theme"].children[0].function();
+                    setSettings((prev) => ({ ...prev, mode: "light" }));
                   }
                 }
               }}
@@ -1582,195 +1704,27 @@ export default function ControlPanel({
     );
   }
 
-  function getState() {
-    switch (saveState) {
-      case State.NONE:
-        return t("no_changes");
-      case State.LOADING:
-        return t("loading");
-      case State.SAVED:
-        return `${t("last_saved")} ${lastSaved}`;
-      case State.SAVING:
-        return t("saving");
-      case State.ERROR:
-        return t("failed_to_save");
-      case State.FAILED_TO_LOAD:
-        return t("failed_to_load");
-      default:
-        return "";
-    }
-  }
-
-  function header() {
-    return (
-      <nav
-        className="flex justify-between pt-1 items-center whitespace-nowrap"
-        style={isRtl(i18n.language) ? { direction: "rtl" } : {}}
-      >
-        <div className="flex justify-start items-center">
-          <Link to="/">
-            <img
-              width={54}
-              src={icon}
-              alt="logo"
-              className="ms-7 min-w-[54px]"
-            />
-          </Link>
-          <div className="ms-1 mt-1">
-            <div className="flex items-center ms-3 gap-2">
-              {databases[database].image && (
-                <img
-                  src={databases[database].image}
-                  className="h-5"
-                  style={{
-                    filter:
-                      "opacity(0.4) drop-shadow(0 0 0 white) drop-shadow(0 0 0 white)",
-                  }}
-                  alt={databases[database].name + " icon"}
-                  title={databases[database].name + " diagram"}
-                />
-              )}
-              <div
-                className="text-xl  me-1"
-                onPointerEnter={(e) => e.isPrimary && setShowEditName(true)}
-                onPointerLeave={(e) => e.isPrimary && setShowEditName(false)}
-                onPointerDown={(e) => {
-                  e.target.releasePointerCapture(e.pointerId);
-                }}
-                onClick={() => setModal(MODAL.RENAME)}
-              >
-                {window.name.split(" ")[0] === "t" ? "Templates/" : "Diagrams/"}
-                {title}
-              </div>
-              {(showEditName || modal === MODAL.RENAME) && <IconEdit />}
-            </div>
-            <div className="flex justify-between items-center">
-              <div className="flex justify-start text-md select-none me-2">
-                {Object.keys(menu).map((category) => (
-                  <Dropdown
-                    key={category}
-                    position="bottomLeft"
-                    style={{
-                      width: "240px",
-                      direction: isRtl(i18n.language) ? "rtl" : "ltr",
-                    }}
-                    render={
-                      <Dropdown.Menu className="menu max-h-[calc(100vh-80px)] overflow-auto">
-                        {Object.keys(menu[category]).map((item, index) => {
-                          if (menu[category][item].children) {
-                            return (
-                              <Dropdown
-                                style={{ width: "150px" }}
-                                key={item}
-                                position="rightTop"
-                                render={
-                                  <Dropdown.Menu>
-                                    {menu[category][item].children.map(
-                                      (e, i) => (
-                                        <Dropdown.Item
-                                          key={i}
-                                          onClick={e.function}
-                                          className="flex justify-between"
-                                        >
-                                          <span>{e.name}</span>
-                                          {e.label && (
-                                            <Tag
-                                              size="small"
-                                              color="light-blue"
-                                            >
-                                              {e.label}
-                                            </Tag>
-                                          )}
-                                        </Dropdown.Item>
-                                      ),
-                                    )}
-                                  </Dropdown.Menu>
-                                }
-                              >
-                                <Dropdown.Item
-                                  style={{
-                                    display: "flex",
-                                    justifyContent: "space-between",
-                                    alignItems: "center",
-                                  }}
-                                  onClick={menu[category][item].function}
-                                >
-                                  {t(item)}
-                                  {isRtl(i18n.language) ? (
-                                    <IconChevronLeft />
-                                  ) : (
-                                    <IconChevronRight />
-                                  )}
-                                </Dropdown.Item>
-                              </Dropdown>
-                            );
-                          }
-                          if (menu[category][item].warning) {
-                            return (
-                              <Popconfirm
-                                key={index}
-                                title={menu[category][item].warning.title}
-                                content={menu[category][item].warning.message}
-                                onConfirm={menu[category][item].function}
-                                position="right"
-                                okText={t("confirm")}
-                                cancelText={t("cancel")}
-                              >
-                                <Dropdown.Item>{t(item)}</Dropdown.Item>
-                              </Popconfirm>
-                            );
-                          }
-                          return (
-                            <Dropdown.Item
-                              key={index}
-                              onClick={menu[category][item].function}
-                              style={
-                                menu[category][item].shortcut && {
-                                  display: "flex",
-                                  justifyContent: "space-between",
-                                  alignItems: "center",
-                                }
-                              }
-                            >
-                              <div className="w-full flex items-center justify-between">
-                                <div>{t(item)}</div>
-                                <div className="flex items-center gap-1">
-                                  {menu[category][item].shortcut && (
-                                    <div className="text-gray-400">
-                                      {menu[category][item].shortcut}
-                                    </div>
-                                  )}
-                                  {menu[category][item].state &&
-                                    menu[category][item].state}
-                                </div>
-                              </div>
-                            </Dropdown.Item>
-                          );
-                        })}
-                      </Dropdown.Menu>
-                    }
-                  >
-                    <div className="px-3 py-1 hover-2 rounded-sm">
-                      {t(category)}
-                    </div>
-                  </Dropdown>
-                ))}
-              </div>
-              <Button
-                size="small"
-                type="tertiary"
-                icon={
-                  saveState === State.LOADING || saveState === State.SAVING ? (
-                    <Spin size="small" />
-                  ) : null
-                }
-              >
-                {getState()}
-              </Button>
-            </div>
-          </div>
-        </div>
-      </nav>
-    );
-  }
+  return (
+    <>
+      <div>
+        {layout.header && header()}
+        {layout.toolbar && toolbar()}
+      </div>
+      <Modal
+        modal={modal}
+        exportData={exportData}
+        setExportData={setExportData}
+        title={title}
+        setTitle={setTitle}
+        setDiagramId={setDiagramId}
+        setModal={setModal}
+        importFrom={importFrom}
+        importDb={importDb}
+      />
+      <Sidesheet
+        type={sidesheet}
+        onClose={() => setSidesheet(SIDESHEET.NONE)}
+      />
+    </>
+  );
 }

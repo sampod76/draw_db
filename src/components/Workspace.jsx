@@ -4,7 +4,7 @@ import Canvas from "./EditorCanvas/Canvas";
 import { CanvasContextProvider } from "../context/CanvasContext";
 import SidePanel from "./EditorSidePanel/SidePanel";
 import { DB, State } from "../data/constants";
-import { db } from "../data/db";
+import { db, putDiagramLocal } from "../data/db"; // ⬅️ db.js: id = string PK (cuid)
 import {
   useLayout,
   useSettings,
@@ -19,19 +19,22 @@ import {
   useEnums,
 } from "../hooks";
 import FloatingControls from "./FloatingControls";
-import { Modal, Tag } from "@douyinfe/semi-ui";
+import { Modal, Tag, Toast } from "@douyinfe/semi-ui";
 import { useTranslation } from "react-i18next";
 import { databases } from "../data/databases";
 import { isRtl } from "../i18n/utils/rtl";
 import { useSearchParams } from "react-router-dom";
 import { get } from "../api/gists";
+import cuid from "cuid";
+import { remoteDb } from "../data/db.remote";
 
 export const IdContext = createContext({ gistId: "", setGistId: () => {} });
 
 const SIDEPANEL_MIN_WIDTH = 384;
 
 export default function WorkSpace() {
-  const [id, setId] = useState(0);
+  // ✅ id এখন string (cuid)
+  const [id, setId] = useState("");
   const [gistId, setGistId] = useState("");
   const [loadedFromGistId, setLoadedFromGistId] = useState("");
   const [title, setTitle] = useState("Untitled Diagram");
@@ -40,6 +43,7 @@ export default function WorkSpace() {
   const [lastSaved, setLastSaved] = useState("");
   const [showSelectDbModal, setShowSelectDbModal] = useState(false);
   const [selectedDb, setSelectedDb] = useState("");
+
   const { layout } = useLayout();
   const { settings } = useSettings();
   const { types, setTypes } = useTypes();
@@ -59,7 +63,137 @@ export default function WorkSpace() {
   } = useDiagram();
   const { undoStack, redoStack, setUndoStack, setRedoStack } = useUndoRedo();
   const { t, i18n } = useTranslation();
-  const [searchParams, setSearchParams] = useSearchParams();
+  let [searchParams, setSearchParams] = useSearchParams();
+
+  // ---------- helpers ----------
+  const makePayload = () => {
+    return {
+      name: title || "Untitled Diagram",
+      database,
+      gistId: gistId ?? null,
+      loadedFromGistId: loadedFromGistId ?? null,
+      tables: tables ?? [],
+      references: relationships ?? [],
+      notes: notes ?? [],
+      areas: areas ?? [],
+      todos: tasks ?? [],
+      pan: transform?.pan ?? { x: 0, y: 0 },
+      zoom: typeof transform?.zoom === "number" ? transform.zoom : 1,
+      ...(databases[database]?.hasEnums && { enums: enums ?? [] }),
+      ...(databases[database]?.hasTypes && { types: types ?? [] }),
+      lastModified: new Date().toISOString(),
+    };
+  };
+
+  const ensureId = () => {
+    if (id && id.length) return id;
+    const newId = cuid();
+    setId(newId);
+    window.name = `d ${newId}`;
+    return newId;
+  };
+
+  // লোকাল + সার্ভার save (একই সাথে)
+  const save = useCallback(async () => {
+    if (saveState !== State.SAVING) return;
+    try {
+      const diagramId = ensureId();
+      const payload = makePayload();
+
+      // 1) Local (Dexie) — put by id (string)
+      await putDiagramLocal({ id: diagramId, ...payload });
+
+      // 2) Server — upsert by same id
+      try {
+        await remoteDb.diagrams.add({ id: diagramId, ...payload });
+      } catch (e) {
+        // সার্ভার না থাকলেও লোকাল সেভ থাকবে — warning দেখালেই যথেষ্ট
+        console.warn("Server upsert failed:", e?.message || e);
+      }
+
+      setSaveState(State.SAVED);
+      setLastSaved(new Date().toLocaleString());
+      Toast.success(t("saved"));
+    } catch (e) {
+      console.error(e);
+      setSaveState(State.ERROR);
+      Toast.error(t("failed_to_save"));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    id,
+    title,
+    database,
+    tables,
+    relationships,
+    notes,
+    areas,
+    tasks,
+    transform,
+    enums,
+    types,
+    gistId,
+    loadedFromGistId,
+    saveState,
+    setSaveState,
+  ]);
+
+  // লোকাল→না পেলে সার্ভার→লোকাল ক্যাশ→UI hydrate
+  const loadById = useCallback(
+    async (diagramId) => {
+      if (!diagramId) return;
+      let d = await db.diagrams.get(diagramId);
+
+      if (!d) {
+        // fallback to server
+        try {
+          const remote = await remoteDb.diagrams.get(diagramId);
+          console.log("🚀 ~ WorkSpace ~ remote:", remote);
+          if (remote) {
+            await putDiagramLocal(remote);
+            d = remote;
+          }
+        } catch (e) {
+          console.warn("Remote fetch failed:", e?.message || e);
+        }
+      }
+
+      if (!d) return;
+
+      if (d.database) setDatabase(d.database);
+      else setDatabase(DB.GENERIC);
+
+      setId(d.id);
+      setGistId(d.gistId || "");
+      setLoadedFromGistId(d.loadedFromGistId || "");
+      setTitle(d.name || "Untitled Diagram");
+      setTables(d.tables || []);
+      setRelationships(d.references || []);
+      setNotes(d.notes || []);
+      setAreas(d.areas || []);
+      setTasks(d.todos || []);
+      setTransform({ pan: d.pan || { x: 0, y: 0 }, zoom: d.zoom ?? 1 });
+      if (databases[d.database]?.hasTypes) setTypes(d.types ?? []);
+      if (databases[d.database]?.hasEnums) setEnums(d.enums ?? []);
+
+      window.name = `d ${d.id}`;
+    },
+    [
+      setDatabase,
+      setId,
+      setGistId,
+      setLoadedFromGistId,
+      setTitle,
+      setTables,
+      setRelationships,
+      setNotes,
+      setAreas,
+      setTasks,
+      setTransform,
+      setTypes,
+      setEnums,
+    ],
+  );
 
   const handleResize = (e) => {
     if (!resize) return;
@@ -67,343 +201,7 @@ export default function WorkSpace() {
     if (w > SIDEPANEL_MIN_WIDTH) setWidth(w);
   };
 
-  // helper: set URL ?d=<id> and remove shareId
-  const setUrlDiagramParam = useCallback(
-    (newId) => {
-      const sp = new URLSearchParams(searchParams);
-      sp.set("d", String(newId));
-      sp.delete("shareId");
-      setSearchParams(sp);
-    },
-    [searchParams, setSearchParams],
-  );
-
-  // SAVE (create/update) + pin ?d=<id>
-  const save = useCallback(async () => {
-    if (saveState !== State.SAVING) return;
-
-    const name = window.name.split(" ");
-    const op = name[0];
-    const saveAsDiagram = window.name === "" || op === "d" || op === "lt";
-
-    if (saveAsDiagram) {
-      searchParams.delete("shareId");
-      setSearchParams(searchParams);
-
-      if ((id === 0 && window.name === "") || op === "lt") {
-        // CREATE
-        await db.diagrams
-          .add({
-            database,
-            name: title,
-            gistId: gistId ?? "",
-            lastModified: new Date(),
-            tables,
-            references: relationships,
-            notes,
-            areas,
-            todos: tasks,
-            pan: transform.pan,
-            zoom: transform.zoom,
-            loadedFromGistId,
-            ...(databases[database].hasEnums && { enums }),
-            ...(databases[database].hasTypes && { types }),
-          })
-          .then((newId) => {
-            setId(newId);
-            window.name = `d ${newId}`;
-            setUrlDiagramParam(newId);
-            setSaveState(State.SAVED);
-            setLastSaved(new Date().toLocaleString());
-          });
-      } else {
-        // UPDATE
-        await db.diagrams
-          .update(id, {
-            database,
-            name: title,
-            lastModified: new Date(),
-            tables,
-            references: relationships,
-            notes,
-            areas,
-            todos: tasks,
-            gistId: gistId ?? "",
-            pan: transform.pan,
-            zoom: transform.zoom,
-            loadedFromGistId,
-            ...(databases[database].hasEnums && { enums }),
-            ...(databases[database].hasTypes && { types }),
-          })
-          .then(() => {
-            setUrlDiagramParam(id);
-            setSaveState(State.SAVED);
-            setLastSaved(new Date().toLocaleString());
-          });
-      }
-    } else {
-      // TEMPLATE SAVE
-      await db.templates
-        .update(id, {
-          database,
-          title,
-          tables,
-          relationships,
-          notes,
-          subjectAreas: areas,
-          todos: tasks,
-          pan: transform.pan,
-          zoom: transform.zoom,
-          ...(databases[database].hasEnums && { enums }),
-          ...(databases[database].hasTypes && { types }),
-        })
-        .then(() => {
-          setSaveState(State.SAVED);
-          setLastSaved(new Date().toLocaleString());
-        })
-        .catch(() => {
-          setSaveState(State.ERROR);
-        });
-    }
-  }, [
-    searchParams,
-    setSearchParams,
-    tables,
-    relationships,
-    notes,
-    areas,
-    types,
-    title,
-    id,
-    tasks,
-    transform,
-    setSaveState,
-    database,
-    enums,
-    gistId,
-    loadedFromGistId,
-    saveState,
-    setUrlDiagramParam,
-  ]);
-
-  // start a brand-new empty diagram (next save() will create/add)
-  const createNewDiagram = useCallback(() => {
-    setId(0);
-    setGistId("");
-    setLoadedFromGistId("");
-    setTitle("Untitled Diagram");
-    setTables([]);
-    setRelationships([]);
-    setNotes([]);
-    setAreas([]);
-    setTasks([]);
-    setTypes([]);
-    setEnums([]);
-    setTransform({ pan: { x: 0, y: 0 }, zoom: 1 });
-    setUndoStack([]);
-    setRedoStack([]);
-    window.name = "";
-
-    const sp = new URLSearchParams(searchParams);
-    sp.delete("d");
-    sp.delete("shareId");
-    setSearchParams(sp);
-
-    if (settings.autosave) setSaveState(State.SAVING);
-  }, [
-    searchParams,
-    setSearchParams,
-    settings.autosave,
-    setEnums,
-    setTypes,
-    setTasks,
-    setAreas,
-    setNotes,
-    setRelationships,
-    setTables,
-    setTransform,
-    setUndoStack,
-    setRedoStack,
-    setSaveState,
-  ]);
-
-  // LOAD: priority -> ?shareId -> ?d=<id> -> window.name -> latest
-  const load = useCallback(async () => {
-    const loadLatestDiagram = async () => {
-      await db.diagrams
-        .orderBy("lastModified")
-        .last()
-        .then((d) => {
-          if (d) {
-            if (d.database) setDatabase(d.database);
-            else setDatabase(DB.GENERIC);
-
-            setId(d.id);
-            setGistId(d.gistId);
-            setLoadedFromGistId(d.loadedFromGistId);
-            setTitle(d.name);
-            setTables(d.tables);
-            setRelationships(d.references);
-            setNotes(d.notes);
-            setAreas(d.areas);
-            setTasks(d.todos ?? []);
-            setTransform({ pan: d.pan, zoom: d.zoom });
-            if (databases[database].hasTypes) setTypes(d.types ?? []);
-            if (databases[database].hasEnums) setEnums(d.enums ?? []);
-            window.name = `d ${d.id}`;
-          } else {
-            window.name = "";
-            if (selectedDb === "") setShowSelectDbModal(true);
-          }
-        })
-        .catch((error) => console.log(error));
-    };
-
-    const loadDiagram = async (did) => {
-      await db.diagrams
-        .get(did)
-        .then((diagram) => {
-          if (diagram) {
-            if (diagram.database) setDatabase(diagram.database);
-            else setDatabase(DB.GENERIC);
-
-            setId(diagram.id);
-            setGistId(diagram.gistId);
-            setLoadedFromGistId(diagram.loadedFromGistId);
-            setTitle(diagram.name);
-            setTables(diagram.tables);
-            setRelationships(diagram.references);
-            setAreas(diagram.areas);
-            setNotes(diagram.notes);
-            setTasks(diagram.todos ?? []);
-            setTransform({ pan: diagram.pan, zoom: diagram.zoom });
-            setUndoStack([]);
-            setRedoStack([]);
-            if (databases[database].hasTypes) setTypes(diagram.types ?? []);
-            if (databases[database].hasEnums) setEnums(diagram.enums ?? []);
-            window.name = `d ${diagram.id}`;
-          } else {
-            window.name = "";
-          }
-        })
-        .catch((error) => console.log(error));
-    };
-
-    const loadTemplate = async (tid) => {
-      await db.templates
-        .get(tid)
-        .then((diagram) => {
-          if (diagram) {
-            if (diagram.database) setDatabase(diagram.database);
-            else setDatabase(DB.GENERIC);
-
-            setId(diagram.id);
-            setTitle(diagram.title);
-            setTables(diagram.tables);
-            setRelationships(diagram.relationships);
-            setAreas(diagram.subjectAreas);
-            setTasks(diagram.todos ?? []);
-            setNotes(diagram.notes);
-            setTransform({ zoom: 1, pan: { x: 0, y: 0 } });
-            setUndoStack([]);
-            setRedoStack([]);
-            if (databases[database].hasTypes) setTypes(diagram.types ?? []);
-            if (databases[database].hasEnums) setEnums(diagram.enums ?? []);
-          } else {
-            if (selectedDb === "") setShowSelectDbModal(true);
-          }
-        })
-        .catch((error) => {
-          console.log(error);
-          if (selectedDb === "") setShowSelectDbModal(true);
-        });
-    };
-
-    const loadFromGist = async (shareId) => {
-      try {
-        const res = await get(shareId);
-        const diagramSrc = res.data.files["share.json"].content;
-        const d = JSON.parse(diagramSrc);
-        setGistId(shareId);
-        setUndoStack([]);
-        setRedoStack([]);
-        setLoadedFromGistId(shareId);
-        setDatabase(d.database);
-        setTitle(d.title);
-        setTables(d.tables);
-        setRelationships(d.relationships);
-        setNotes(d.notes);
-        setAreas(d.subjectAreas);
-        setTransform(d.transform);
-        if (databases[d.database].hasTypes) setTypes(d.types ?? []);
-        if (databases[d.database].hasEnums) setEnums(d.enums ?? []);
-      } catch (e) {
-        console.log(e);
-        setSaveState(State.FAILED_TO_LOAD);
-      }
-    };
-
-    // 1) shareId first
-    const shareId = searchParams.get("shareId");
-    if (shareId) {
-      const existingDiagram = await db.diagrams.get({
-        loadedFromGistId: shareId,
-      });
-      if (existingDiagram) {
-        window.name = "d " + existingDiagram.id;
-        setId(existingDiagram.id);
-      } else {
-        window.name = "";
-        setId(0);
-      }
-      await loadFromGist(shareId);
-      return;
-    }
-
-    // 2) if ?d=<id> present, prefer it
-    const urlDiagramId = searchParams.get("d");
-    if (urlDiagramId && /^\d+$/.test(urlDiagramId)) {
-      window.name = `d ${urlDiagramId}`;
-    }
-
-    // 3) fallback like before
-    if (window.name === "") {
-      await loadLatestDiagram();
-    } else {
-      const name = window.name.split(" ");
-      const op = name[0];
-      const parsedId = parseInt(name[1]);
-      switch (op) {
-        case "d":
-          await loadDiagram(parsedId);
-          break;
-        case "t":
-        case "lt":
-          await loadTemplate(parsedId);
-          break;
-        default:
-          break;
-      }
-    }
-  }, [
-    setTransform,
-    setRedoStack,
-    setUndoStack,
-    setRelationships,
-    setTables,
-    setAreas,
-    setNotes,
-    setTypes,
-    setTasks,
-    setDatabase,
-    database,
-    setEnums,
-    selectedDb,
-    setSaveState,
-    searchParams,
-  ]);
-
-  // AUTOSAVE trigger
+  // অটোসেভ trigger (আপনার আগের মতোই)
   useEffect(() => {
     if (
       tables?.length === 0 &&
@@ -414,8 +212,9 @@ export default function WorkSpace() {
     )
       return;
 
-    if (settings.autosave) setSaveState(State.SAVING);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    if (settings.autosave) {
+      setSaveState(State.SAVING);
+    }
   }, [
     undoStack,
     redoStack,
@@ -429,27 +228,161 @@ export default function WorkSpace() {
     transform.zoom,
     title,
     gistId,
+    setSaveState,
   ]);
 
   useEffect(() => {
     save();
   }, [saveState, save]);
 
+  // প্রাথমিক লোড (URL ?d= / shareId / window.name ফ্লো)
+  const load = useCallback(async () => {
+    const loadLatestDiagram = async () => {
+      // cuid PK হওয়ায় last() করার বদলে updated order দরকার হলে আলাদা ইনডেক্স রাখুন
+      // এখানে সহজে lastModified-এ orderBy করলে চলবে (যদি indexed থাকে)
+      await db.diagrams
+        .orderBy("lastModified")
+        .last()
+        .then(async (d) => {
+          if (d) {
+            await loadById(d.id);
+          } else {
+            window.name = "";
+            if (selectedDb === "") setShowSelectDbModal(true);
+          }
+        })
+        .catch((error) => console.log(error));
+    };
+
+    // shareId (GitHub gist) ফ্লো আগের মতো বজায়
+    const loadFromGist = async (shareId) => {
+      try {
+        const res = await get(shareId);
+        const diagramSrc = res.data.files["share.json"].content;
+        const d = JSON.parse(diagramSrc);
+        const newId = cuid();
+
+        const localData = {
+          id: newId,
+          name: d.title || "Untitled Diagram",
+          database: d.database || DB.GENERIC,
+          tables: d.tables || [],
+          references: d.relationships || [],
+          notes: d.notes || [],
+          areas: d.subjectAreas || [],
+          todos: [],
+          pan: d.transform?.pan || { x: 0, y: 0 },
+          zoom: d.transform?.zoom ?? 1,
+          enums: d.enums || [],
+          types: d.types || [],
+          gistId: shareId,
+          loadedFromGistId: shareId,
+          lastModified: new Date().toISOString(),
+        };
+        await putDiagramLocal(localData);
+        await loadById(newId);
+      } catch (e) {
+        console.log(e);
+        setSaveState(State.FAILED_TO_LOAD);
+      }
+    };
+
+    const shareId = searchParams.get("shareId");
+    const dParam = searchParams.get("d");
+
+    if (shareId) {
+      await loadFromGist(shareId);
+      return;
+    }
+
+    if (dParam) {
+      await loadById(dParam);
+      return;
+    }
+
+    if (!window.name || window.name === "") {
+      await loadLatestDiagram();
+    } else {
+      const parts = window.name.split(" ");
+      const op = parts[0];
+      const _id = parts[1];
+      switch (op) {
+        case "d": {
+          await loadById(_id);
+          break;
+        }
+        // template/lt ফ্লো দরকার হলে এড করুন
+        default:
+          await loadLatestDiagram();
+          break;
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams, setSearchParams, setSaveState, selectedDb, loadById]);
+
   useEffect(() => {
     document.title = "Editor | drawDB";
     load();
   }, [load]);
 
+  // নতুন diagram (fresh cuid) — ControlPanel থেকে onNew এ কল হবে
+  const createNewDiagram = useCallback(() => {
+    const newId = cuid();
+    // URL থেকে পুরনো d/shareId মুছে ফেলি
+    const sp = new URLSearchParams(window.location.search);
+    sp.delete("d");
+    sp.delete("shareId");
+    window.history.replaceState({}, "", `${window.location.pathname}?${sp}`);
+
+    // clear current state
+    setId(newId);
+    setGistId("");
+    setLoadedFromGistId("");
+    setTitle("Untitled Diagram");
+    setTables([]);
+    setRelationships([]);
+    setAreas([]);
+    setNotes([]);
+    setTasks([]);
+    setTypes([]);
+    setEnums([]);
+    setUndoStack([]);
+    setRedoStack([]);
+    setTransform({ pan: { x: 0, y: 0 }, zoom: 1 });
+    setDatabase(DB.GENERIC);
+
+    // window.name আপডেট
+    window.name = `d ${newId}`;
+
+    // প্রথম সেভে লোকাল+সার্ভার তৈরি হবে
+    setSaveState(State.SAVING);
+  }, [
+    setTables,
+    setRelationships,
+    setAreas,
+    setNotes,
+    setTasks,
+    setTypes,
+    setEnums,
+    setUndoStack,
+    setRedoStack,
+    setTransform,
+    setDatabase,
+    setSaveState,
+  ]);
+
   return (
     <div className="h-full flex flex-col overflow-hidden theme">
       <IdContext.Provider value={{ gistId, setGistId }}>
         <ControlPanel
-          diagramId={id}
+          // props for header
+          diagramId={id} // string cuid
           setDiagramId={setId}
           title={title}
           setTitle={setTitle}
           lastSaved={lastSaved}
-          onNew={createNewDiagram} // <- wire NEW
+          // new: give ControlPanel a way to trigger "new"
+          onNew={createNewDiagram}
         />
       </IdContext.Provider>
 
@@ -459,7 +392,7 @@ export default function WorkSpace() {
         onPointerLeave={(e) => e.isPrimary && setResize(false)}
         onPointerMove={(e) => e.isPrimary && handleResize(e)}
         onPointerDown={(e) => {
-          e.target.releasePointerCapture(e.pointerId);
+          e.target.releasePointerCapture?.(e.pointerId);
         }}
         style={isRtl(i18n.language) ? { direction: "rtl" } : {}}
       >
@@ -478,6 +411,7 @@ export default function WorkSpace() {
         </div>
       </div>
 
+      {/* প্রথমবার DB টাইপ সিলেক্ট */}
       <Modal
         centered
         size="medium"
